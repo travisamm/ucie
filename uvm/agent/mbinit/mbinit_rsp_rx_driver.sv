@@ -5,7 +5,8 @@
 // mbinit_rsp_rx_driver  (Pass 3)
 // ---------------------------------------------------------------------------
 // Responder analog of mbinit_req_rx_driver: drives the responder RX lane on
-// mb_rsp_if plus the tx_ready auto-stub. See mbinit_req_rx_driver for notes.
+// mb_rsp_if plus the tx_ready auto-stub. Reset-aware (Pass 6) the same way - see
+// mbinit_req_rx_driver for the structure and rationale.
 // ---------------------------------------------------------------------------
 class mbinit_rsp_rx_driver extends uvm_driver #(mbinit_rx_transaction);
   `uvm_component_utils(mbinit_rsp_rx_driver)
@@ -23,18 +24,37 @@ class mbinit_rsp_rx_driver extends uvm_driver #(mbinit_rx_transaction);
   endfunction
 
   task run_phase(uvm_phase phase);
-    drive_idle();
-    wait (vif.reset == 1'b0);
-    fork
-      forever begin
-        @(vif.drv_cb);
-        vif.drv_cb.tx_ready <= vif.drv_cb.tx_valid;
-      end
-    join_none
+    bit item_in_flight;
     forever begin
-      seq_item_port.get_next_item(req);
-      drive_item(req);
-      seq_item_port.item_done();
+      drive_idle();
+      wait (vif.reset == 1'b0);
+      item_in_flight = 0;
+      fork
+        begin : txready  // auto-stub: ready follows valid every cycle
+          forever begin
+            @(vif.drv_cb);
+            vif.drv_cb.tx_ready <= vif.drv_cb.tx_valid;
+          end
+        end
+        begin : active
+          forever begin
+            seq_item_port.get_next_item(req);
+            item_in_flight = 1;
+            drive_item(req);
+            seq_item_port.item_done();
+            item_in_flight = 0;
+          end
+        end
+        begin : reset_watch
+          @(posedge vif.reset);
+        end
+      join_any
+      disable fork;
+      drive_idle();
+      if (item_in_flight) begin
+        seq_item_port.item_done();  // release the aborted item
+        item_in_flight = 0;
+      end
     end
   endtask
 

@@ -25,9 +25,14 @@ module mbinit_tb_top;
 
   logic clock;
   logic reset;
+  logic por_reset;
 
   initial begin clock = 0; forever #5 clock = ~clock; end
-  initial begin reset = 1; #20 reset = 0; end
+  // Pass 6: reset generation is power-on reset OR a sequence-injected reset. The
+  // reset agent drives rst_if.reset_req; the combined DUT reset (assign below) is
+  // the OR of the two, so mid-sim resets can be injected WITHOUT touching the DUT
+  // port connection (.reset(reset) is unchanged). Mirrors SBINIT's logphy_tb_top.
+  initial begin por_reset = 1; #20 por_reset = 0; end
 
   mbinit_if vif(clock, reset);
 
@@ -48,6 +53,10 @@ module mbinit_tb_top;
   mb_pttest_req_if     pttest_req_if(clock, reset);
   mb_pttest_rsp_if     pttest_rsp_if(clock, reset);
   mb_lane_ctrl_if      lane_ctrl_if (clock, reset);
+
+  // Pass 6: combined DUT reset = POR | sequence-injected reset_req. rst_if is
+  // observed by the reset monitor and driven (reset_req) by mbinit_reset_driver.
+  assign reset = por_reset | rst_if.reset_req;
 
 
   MBInitSM dut (

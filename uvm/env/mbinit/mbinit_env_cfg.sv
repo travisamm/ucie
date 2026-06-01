@@ -57,6 +57,14 @@ class mbinit_env_cfg extends uvm_object;
   bit          rm07_first_repairmb_pt_all_fault= 1'b0;
   bit          rm05_post_repair_pt_sequence    = 1'b0;
 
+  // ---- Pass 6: per-lane payload-stability SVA opt-in (default OFF) ----------
+  // mbinit_env pushes these onto each lane interface's stable_chk_en bit, which
+  // gates mbinit_stream_sva's back-pressure payload-stability checker. Default 0
+  // keeps the checker dormant for the 12 legacy tests; a Pass 8 back-pressure
+  // test sets cfg.req_stable_chk_en / rsp_stable_chk_en to opt in per lane.
+  bit          req_stable_chk_en               = 1'b0;
+  bit          rsp_stable_chk_en               = 1'b0;
+
   function new(string name = "mbinit_env_cfg");
     super.new(name);
   endfunction

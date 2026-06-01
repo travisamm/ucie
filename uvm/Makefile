@@ -151,6 +151,8 @@ mbinit:
 	  ./tb/mbinit/mbinit_bind_exports.sv \
       ./tb/logphy_sva.sv \
 	  ./tb/mbinit/mbinit_tb_top.sv \
+	  ./tb/mbinit/mbinit_reset_sva.sv \
+	  ./tb/mbinit/mbinit_stream_sva.sv \
 	  $(MBINIT_XRUN_EXTRA) \
 	  +UVM_TESTNAME=$(MBTEST)
 
@@ -405,6 +407,8 @@ cov_mbinit:
 	    ./tb/mbinit/mbinit_bind_exports.sv \
 	    ./tb/logphy_sva.sv \
 	    ./tb/mbinit/mbinit_tb_top.sv \
+	    ./tb/mbinit/mbinit_reset_sva.sv \
+	    ./tb/mbinit/mbinit_stream_sva.sv \
 	    +UVM_TESTNAME=$$test || true; \
 	done
 	$(MAKE) cov_report_md COV_WORK=$(COV_MBINIT_WORK) COV_SUITE=mbinit

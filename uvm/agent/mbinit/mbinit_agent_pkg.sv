@@ -16,6 +16,8 @@ package mbinit_agent_pkg;
   `include "mbinit_rx_transaction.sv"
   `include "mbinit_ctrl_transaction.sv"
   `include "mbinit_service_cfg.sv"
+  // Pass 6: reset-injection item
+  `include "mbinit_reset_transaction.sv"
 
   // Inline sequencer typed to the MBINIT transaction
   class mbinit_sequencer extends uvm_sequencer #(mbinit_transaction);
@@ -28,6 +30,8 @@ package mbinit_agent_pkg;
   // Pass 3: new split-channel sequencers
   `include "mbinit_rx_sequencer.sv"
   `include "mbinit_ctrl_sequencer.sv"
+  // Pass 6: reset-injection sequencer
+  `include "mbinit_reset_sequencer.sv"
 
   // Legacy driver + new split drivers + legacy adapter (extends mbinit_driver)
   `include "mbinit_driver.sv"
@@ -35,6 +39,8 @@ package mbinit_agent_pkg;
   `include "mbinit_rsp_rx_driver.sv"
   `include "mbinit_ctrl_driver.sv"
   `include "mbinit_legacy_adapter.sv"
+  // Pass 6: reset-injection driver
+  `include "mbinit_reset_driver.sv"
 
   // Pass 3: autonomous service stubs (replace the legacy driver's stub forks)
   `include "mbinit_cal_stub.sv"

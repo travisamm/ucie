@@ -10,9 +10,11 @@
 // behavior: rx_valid is held for hold_cycles then cleared; tx_ready tracks the
 // DUT's tx_valid every cycle.
 //
-// Pass 3 uses the simple structure (wait reset-low, then forever). Reset-aware
-// abort/re-idle is added for all drivers in Pass 6.
-// TODO(pass>=6): promote tx_ready to its own sequencer/driver for back-pressure.
+// Pass 6 makes it reset-aware: idle outputs, run until reset asserts, then abort
+// the in-flight drive, re-idle, and release the UVM item handshake so a sequence
+// is never stranded across a reset boundary. The tx_ready auto-stub runs as a
+// sibling process INSIDE the same fork so it is torn down on reset too.
+// TODO(pass>=8): promote tx_ready to its own sequencer/driver for back-pressure.
 // ---------------------------------------------------------------------------
 class mbinit_req_rx_driver extends uvm_driver #(mbinit_rx_transaction);
   `uvm_component_utils(mbinit_req_rx_driver)
@@ -30,19 +32,37 @@ class mbinit_req_rx_driver extends uvm_driver #(mbinit_rx_transaction);
   endfunction
 
   task run_phase(uvm_phase phase);
-    drive_idle();
-    wait (vif.reset == 1'b0);
-    // tx_ready auto-stub: sibling process, never disabled here.
-    fork
-      forever begin
-        @(vif.drv_cb);
-        vif.drv_cb.tx_ready <= vif.drv_cb.tx_valid;
-      end
-    join_none
+    bit item_in_flight;
     forever begin
-      seq_item_port.get_next_item(req);
-      drive_item(req);
-      seq_item_port.item_done();
+      drive_idle();
+      wait (vif.reset == 1'b0);
+      item_in_flight = 0;
+      fork
+        begin : txready  // auto-stub: ready follows valid every cycle
+          forever begin
+            @(vif.drv_cb);
+            vif.drv_cb.tx_ready <= vif.drv_cb.tx_valid;
+          end
+        end
+        begin : active
+          forever begin
+            seq_item_port.get_next_item(req);
+            item_in_flight = 1;
+            drive_item(req);
+            seq_item_port.item_done();
+            item_in_flight = 0;
+          end
+        end
+        begin : reset_watch
+          @(posedge vif.reset);
+        end
+      join_any
+      disable fork;
+      drive_idle();
+      if (item_in_flight) begin
+        seq_item_port.item_done();  // release the aborted item
+        item_in_flight = 0;
+      end
     end
   endtask
 

@@ -6,13 +6,13 @@
 #   subsystem : mbinit (default) | sbinit
 #   action    : (none) — load merged database (union of all runs)
 #               sanity — load only the sanity run
-#               report — open the HTML report in a browser
+#               report — print the Markdown coverage report
 #
 # Examples:
 #   ./open_imc.sh                    — mbinit merged GUI
 #   ./open_imc.sh sbinit             — sbinit merged GUI
 #   ./open_imc.sh mbinit sanity      — mbinit sanity-only GUI
-#   ./open_imc.sh sbinit report      — open sbinit HTML report
+#   ./open_imc.sh sbinit report      — print sbinit Markdown report
 
 set -e
 
@@ -40,7 +40,7 @@ WORK="$SCRIPT_DIR/cov_work/$SUBSYS"
 SCOPE="$WORK/scope"
 MERGED="$SCOPE/merged_all"
 RUNFILE="$WORK/runfile.txt"
-REPORT="$WORK/report/index.html"
+REPORT="$WORK/coverage.md"
 MAKE_TARGET="cov_$SUBSYS"
 
 case "$ACTION" in
@@ -58,8 +58,8 @@ case "$ACTION" in
       echo "No report found. Run 'make $MAKE_TARGET' first."
       exit 1
     fi
-    echo "Opening HTML report: $REPORT"
-    xdg-open "$REPORT" 2>/dev/null || firefox "$REPORT" 2>/dev/null || echo "Open manually: $REPORT"
+    echo "Markdown coverage report: $REPORT"
+    "${PAGER:-cat}" "$REPORT"
     ;;
   *)
     # Build merged database if it doesn't exist yet

@@ -9,6 +9,12 @@
 // are updated per item. fsmCtrl_start is LATCHED: once an item asserts it, it
 // stays high (the RTL gates the FSM on start held until done) - matching the
 // legacy driver's "only assert, never clear".
+//
+// Pass 6 makes it reset-aware: on reset the start latch is CLEARED and the bus
+// is re-idled (fsmCtrl_start back to 0), so after the DUT FSM resets to PARAM a
+// fresh item must re-kick it. The in-flight item is aborted and its UVM
+// handshake released. Behavior-neutral for the POR-only legacy tests (start is
+// 0 throughout the power-on reset window regardless).
 // ---------------------------------------------------------------------------
 class mbinit_ctrl_driver extends uvm_driver #(mbinit_ctrl_transaction);
   `uvm_component_utils(mbinit_ctrl_driver)
@@ -27,13 +33,32 @@ class mbinit_ctrl_driver extends uvm_driver #(mbinit_ctrl_transaction);
   endfunction
 
   task run_phase(uvm_phase phase);
-    start_latched = 1'b0;
-    drive_idle();
-    wait (vif.reset == 1'b0);
+    bit item_in_flight;
     forever begin
-      seq_item_port.get_next_item(req);
-      drive_item(req);
-      seq_item_port.item_done();
+      start_latched  = 1'b0;  // a fresh reset clears the start kick
+      drive_idle();
+      wait (vif.reset == 1'b0);
+      item_in_flight = 0;
+      fork
+        begin : active
+          forever begin
+            seq_item_port.get_next_item(req);
+            item_in_flight = 1;
+            drive_item(req);
+            seq_item_port.item_done();
+            item_in_flight = 0;
+          end
+        end
+        begin : reset_watch
+          @(posedge vif.reset);
+        end
+      join_any
+      disable fork;
+      drive_idle();
+      if (item_in_flight) begin
+        seq_item_port.item_done();  // release the aborted item
+        item_in_flight = 0;
+      end
     end
   endtask
 

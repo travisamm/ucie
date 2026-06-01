@@ -33,7 +33,24 @@
       UNCONNECTED (retired Pass 8). Legacy scoreboard backed up at
       /tmp/mbinit_scoreboard_legacy_backup.sv. Pending user make mbinit_all +
       cov_mbinit verification.
-- [ ] Pass 6: Reset and assertion layer
+- [x] Pass 6: Reset and assertion layer. Sequence-driven reset injection
+      (mbinit_reset_{transaction,sequencer,driver}) OR'd into the DUT reset in
+      tb_top via `assign reset = por_reset | rst_if.reset_req` (DUT .reset(reset)
+      port connection untouched); vseqr.reset_seqr handle + env wiring added. All
+      RX/ctrl drivers AND all 5 service stubs made reset-aware (idle outputs,
+      abort in-flight cleanly via fork/reset_watch + disable fork, release UVM
+      handshakes; tx_ready auto-stub folded into the same fork). New SVA:
+      mbinit_reset_sva (ALWAYS-ON reset-quiesce on sideband lanes + ctrl + ALL
+      service buses - cal/pw/pr/pttest_req/pttest_rsp; DUT request/transmit
+      quiesce + TB response idle, qualified by `(reset && $past(reset))`,
+      `!== 1'b1` X-tolerant) and mbinit_stream_sva (generic payload-stability
+      under back-pressure, opt-in per lane via cfg.{req,rsp}_stable_chk_en,
+      default OFF -> dormant for the 12 legacy tests). Both SVA files added to the
+      mbinit + cov_mbinit Makefile targets after mbinit_tb_top.sv. Strict
+      requester/responder state-sync SVA left unbound (XC-03). Behavior-neutral
+      for the POR-only legacy tests (reset-quiesce evaluates only at the 2nd held
+      POR cycle, where all signals are 0/X). Pending user make mbinit_all +
+      cov_mbinit verification.
 - [ ] Pass 7: MBINIT reference predictor
 - [ ] Pass 8: Test migration after framework
 

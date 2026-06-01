@@ -50,6 +50,15 @@ class mbinit_env extends uvm_env;
   mbinit_service_cfg       svc_cfg;
   mbinit_virtual_sequencer vseqr;
 
+  // Pass 6: sequence-driven reset injection.
+  mbinit_reset_driver      reset_driver;
+  mbinit_reset_sequencer   reset_seqr;
+  // Pass 6: lane vifs, so the env can push the payload-stability SVA opt-in
+  // (cfg.req_stable_chk_en / rsp_stable_chk_en) onto each interface's
+  // stable_chk_en bit at start_of_simulation.
+  virtual mb_req_if        req_vif;
+  virtual mb_rsp_if        rsp_vif;
+
   // Pass 4: event-producing monitors + passive audit subscriber (shadow stream;
   // legacy monitor/scoreboard/coverage stay authoritative).
   mbinit_req_monitor        evt_req_mon;
@@ -101,6 +110,16 @@ class mbinit_env extends uvm_env;
     pttest_rsp_stub = mbinit_pttest_rsp_stub::type_id::create("pttest_rsp_stub", this);
     vseqr           = mbinit_virtual_sequencer::type_id::create("vseqr", this);
 
+    // Pass 6: reset-injection driver + sequencer.
+    reset_driver = mbinit_reset_driver::type_id::create("reset_driver", this);
+    reset_seqr   = mbinit_reset_sequencer::type_id::create("reset_seqr", this);
+
+    // Pass 6: grab the lane vifs for the payload-stability SVA opt-in push.
+    if (!uvm_config_db#(virtual mb_req_if)::get(this, "", "mbinit_req_vif", req_vif))
+      `uvm_fatal("MBINIT_ENV", "mbinit_req_vif not set")
+    if (!uvm_config_db#(virtual mb_rsp_if)::get(this, "", "mbinit_rsp_vif", rsp_vif))
+      `uvm_fatal("MBINIT_ENV", "mbinit_rsp_vif not set")
+
     // Pass 4 event producers + audit subscriber.
     evt_req_mon         = mbinit_req_monitor::type_id::create("evt_req_mon", this);
     evt_rsp_mon         = mbinit_rsp_monitor::type_id::create("evt_rsp_mon", this);
@@ -126,11 +145,14 @@ class mbinit_env extends uvm_env;
     req_rx_driver.seq_item_port.connect(req_rx_seqr.seq_item_export);
     rsp_rx_driver.seq_item_port.connect(rsp_rx_seqr.seq_item_export);
     ctrl_driver.seq_item_port.connect(ctrl_seqr.seq_item_export);
+    // Pass 6: reset driver pulls from the env-level reset sequencer.
+    reset_driver.seq_item_port.connect(reset_seqr.seq_item_export);
 
     // Virtual sequencer handles (for Pass 8 vseqs).
     vseqr.req_rx_seqr = req_rx_seqr;
     vseqr.rsp_rx_seqr = rsp_rx_seqr;
     vseqr.ctrl_seqr   = ctrl_seqr;
+    vseqr.reset_seqr  = reset_seqr;
 
     // Wire the legacy adapter to the split sequencers + service policy.
     if (!$cast(ad, agent.driver))
@@ -160,6 +182,19 @@ class mbinit_env extends uvm_env;
     ap.connect(scoreboard.ev_export);
     ap.connect(coverage.analysis_export);
     ap.connect(evt_audit.analysis_export);
+  endfunction
+
+  // Pass 6: push the per-lane payload-stability SVA opt-in onto each lane
+  // interface's stable_chk_en bit. Done at start_of_simulation (top-down) so a
+  // Pass 8 test that sets env.cfg.{req,rsp}_stable_chk_en in its own
+  // start_of_simulation (which runs before this, the env being the child) is
+  // honored. Default cfg = 0 keeps the checker dormant for the legacy tests.
+  function void start_of_simulation_phase(uvm_phase phase);
+    super.start_of_simulation_phase(phase);
+    if (cfg != null) begin
+      req_vif.stable_chk_en = cfg.req_stable_chk_en;
+      rsp_vif.stable_chk_en = cfg.rsp_stable_chk_en;
+    end
   endfunction
 
 endclass

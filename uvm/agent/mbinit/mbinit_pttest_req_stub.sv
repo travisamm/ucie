@@ -17,6 +17,10 @@
 //
 // REPAIRMB is currentState == 3'h5 (read from mb_ctrl_if). The per-REPAIRMB
 // point-test index resets whenever the DUT leaves REPAIRMB.
+//
+// Pass 6 makes it reset-aware: done/results are idled and the start edge + the
+// per-REPAIRMB index reset whenever reset is high; a reset mid-result aborts
+// cleanly via the reset_watch fork.
 // ---------------------------------------------------------------------------
 class mbinit_pttest_req_stub extends uvm_component;
   `uvm_component_utils(mbinit_pttest_req_stub)
@@ -45,39 +49,52 @@ class mbinit_pttest_req_stub extends uvm_component;
     bit          prev_start;
     int unsigned idx;
     logic [15:0] ptb;
-    prev_start = 1'b0;
-    idx        = 0;
-    vif.drv_cb.done          <= 1'b0;
-    vif.drv_cb.results_valid <= 1'b0;
-    vif.drv_cb.results_bits  <= 16'h0;
     forever begin
-      @(vif.drv_cb);
-      if (ctrl_vif.currentState != MB_STATE_REPAIRMB)
-        idx = 0;
-      if (vif.drv_cb.start && !prev_start) begin
-        repeat (3) @(vif.drv_cb);
-        if (ctrl_vif.currentState == MB_STATE_REPAIRMB) begin
-          if (svc_cfg.rm07_first_repairmb_pt_all_fault && idx == 0)
-            ptb = 16'hFFFF;
-          else if (svc_cfg.rm05_post_repair_pt_sequence)
-            ptb = (idx == 0) ? 16'hFF00 : 16'hFFFF;
-          else if (svc_cfg.rm02_mixed_pt_first && idx == 0)
-            ptb = 16'h0FF0;
-          else
-            ptb = svc_cfg.pt_test_results;
+      vif.drv_cb.done          <= 1'b0;
+      vif.drv_cb.results_valid <= 1'b0;
+      vif.drv_cb.results_bits  <= 16'h0;
+      prev_start = 1'b0;
+      idx        = 0;
+      wait (vif.reset == 1'b0);
+      fork
+        begin : active
+          forever begin
+            @(vif.drv_cb);
+            if (ctrl_vif.currentState != MB_STATE_REPAIRMB)
+              idx = 0;
+            if (vif.drv_cb.start && !prev_start) begin
+              repeat (3) @(vif.drv_cb);
+              if (ctrl_vif.currentState == MB_STATE_REPAIRMB) begin
+                if (svc_cfg.rm07_first_repairmb_pt_all_fault && idx == 0)
+                  ptb = 16'hFFFF;
+                else if (svc_cfg.rm05_post_repair_pt_sequence)
+                  ptb = (idx == 0) ? 16'hFF00 : 16'hFFFF;
+                else if (svc_cfg.rm02_mixed_pt_first && idx == 0)
+                  ptb = 16'h0FF0;
+                else
+                  ptb = svc_cfg.pt_test_results;
+              end
+              else
+                ptb = svc_cfg.pt_test_results;
+              vif.drv_cb.done          <= 1'b1;
+              vif.drv_cb.results_valid <= 1'b1;
+              vif.drv_cb.results_bits  <= ptb;
+              @(vif.drv_cb);
+              vif.drv_cb.done          <= 1'b0;
+              vif.drv_cb.results_valid <= 1'b0;
+              if (ctrl_vif.currentState == MB_STATE_REPAIRMB)
+                idx++;
+            end
+            prev_start = vif.drv_cb.start;
+          end
         end
-        else
-          ptb = svc_cfg.pt_test_results;
-        vif.drv_cb.done          <= 1'b1;
-        vif.drv_cb.results_valid <= 1'b1;
-        vif.drv_cb.results_bits  <= ptb;
-        @(vif.drv_cb);
-        vif.drv_cb.done          <= 1'b0;
-        vif.drv_cb.results_valid <= 1'b0;
-        if (ctrl_vif.currentState == MB_STATE_REPAIRMB)
-          idx++;
-      end
-      prev_start = vif.drv_cb.start;
+        begin : reset_watch
+          @(posedge vif.reset);
+        end
+      join_any
+      disable fork;
+      vif.drv_cb.done          <= 1'b0;  // re-idle after a reset abort
+      vif.drv_cb.results_valid <= 1'b0;
     end
   endtask
 
