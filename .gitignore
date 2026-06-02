@@ -82,6 +82,9 @@ INCA_libs/
 uvm/cov_work/
 uvm/run_logs/
 
+# Regression triage snapshots (transient build output, like run_logs/)
+regressions/
+
 out/
 .metals/
 .vscode/

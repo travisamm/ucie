@@ -5,12 +5,27 @@ XRUN_OPTS := -sv -coverage all -covoverwrite -uvm -access +rwc -timescale 1ns/1p
 COV_WORK  ?= cov_work
 COV_TEST  ?= default
 
-.PHONY: sbinit sbinit_all sbinit_regress mbinit mbinit_all mbinit_regress mbinit_lr03_lr04 ltsm mbtrain _mbtrain_run mbtrain_regress patternwriter_lr02 cov_mbinit cov_sbinit cov_report clean
+.PHONY: sbinit sbinit_all sbinit_regress mbinit mbinit_all mbinit_regress mbinit_lr03_lr04 ltsm mbtrain _mbtrain_run mbtrain_regress patternwriter_lr02 cov_mbinit cov_sbinit cov_report clean regress collect_regress triage_prompt agent_triage save_regress
 
 SBTEST ?= test_sbinit_sanity
 MBTEST ?= test_mbinit_sanity
 # Optional xrun args for mbinit (e.g. MBINIT_XRUN_EXTRA='+define+MBINIT_RM05_DEBUG')
 MBINIT_XRUN_EXTRA ?=
+# Optional xrun args for sbinit / mbtrain (mirror MBINIT_XRUN_EXTRA above).
+SBINIT_XRUN_EXTRA ?=
+MBTRAIN_XRUN_EXTRA ?=
+# Global xrun escape hatch wired into sbinit, mbinit, and mbtrain at once
+# (e.g. XRUN_DEBUG_EXTRA='+define+TRIAGE_DEBUG').
+XRUN_DEBUG_EXTRA ?=
+
+# ---- Regression triage (see docs/regression_triage.md) ----
+# Output dir for the latest regression snapshot (overwritten each run).
+REGRESS_OUT ?= regressions/latest
+# Suites the top-level `regress` target loops over. MVP = SBINIT only; extend
+# later by appending, e.g. REGRESS_SUITES = sbinit_all mbinit_all mbtrain.
+REGRESS_SUITES ?= sbinit_all
+PYTHON ?= python3
+CLAUDE ?= claude
 # All MBINIT UVM tests (see tests/mbinit/mbinit_tests.sv). Override to run a subset.
 MBINIT_TESTS ?= test_mbinit_sanity test_mbinit_param_mismatch test_mbinit_param_only test_mbinit_cal test_mbinit_repairclk test_mbinit_repairclk_unrep test_mbinit_repairval_unrep test_mbinit_lr04_reversal_apply test_mbinit_lr07_reversal_trainerror test_mbinit_rm02_per_lane_reader test_mbinit_rm07_unrepairable test_mbinit_rm05_post_repair_persist
 MBINIT_LOG_DIR ?= run_logs/mbinit
@@ -52,6 +67,7 @@ sbinit:
           ./tb/sbinit/sbinit_stream_sva.sv \
           ./tb/sbinit/sbinit_reset_sva.sv \
           ./tb/sbinit/sbinit_persistence_sva.sv \
+          $(SBINIT_XRUN_EXTRA) $(XRUN_DEBUG_EXTRA) \
           +UVM_TESTNAME=$(SBTEST) || true
 
 SBINIT_LOG_DIR ?= run_logs/sbinit
@@ -119,7 +135,10 @@ sbinit_all:
 	printf "\nDetailed results: %s\n" "$$results_file"; \
 	exit $$failed
 
-sbinit_regress: sbinit_all
+# Repurposed: run the SBINIT regression flow (suite run -> collect -> prompt).
+# Was an alias for sbinit_all; now scopes the generic `regress` flow to SBINIT.
+sbinit_regress:
+	$(MAKE) regress REGRESS_SUITES=sbinit_all
 
 # ---- MBINIT ----
 mbinit:
@@ -139,7 +158,7 @@ mbinit:
 	  ./tb/mbinit/mbinit_bind_exports.sv \
       ./tb/logphy_sva.sv \
 	  ./tb/mbinit/mbinit_tb_top.sv \
-	  $(MBINIT_XRUN_EXTRA) \
+	  $(MBINIT_XRUN_EXTRA) $(XRUN_DEBUG_EXTRA) \
 	  +UVM_TESTNAME=$(MBTEST)
 
 # LR-03/04/06/07: sanity (LR-03, LR-06 on happy path), LR-04 retry, LR-07 double-fail error.
@@ -301,6 +320,7 @@ _mbtrain_run:
 	  ./seq/mbtrain/mbtrain_seq_pkg.sv \
 	  ./tests/mbtrain/mbtrain_test_pkg.sv \
 	  ./tb/mbtrain/mbtrain_tb_top.sv \
+	  $(MBTRAIN_XRUN_EXTRA) $(XRUN_DEBUG_EXTRA) \
 	  +UVM_TESTNAME=$(MBTRAINTEST)
 
 mbtrain_regress: mbtrain
@@ -404,6 +424,65 @@ cov_report:
 	  -execcmd "exclude -type mbinit_state_sync_sva -metrics assertion -comment {Intentionally unbound: XC-03 property too tight for RTL substate timing}; report_metrics -overwrite -out $(ABS_COV)/report; exit"
 	@echo ""
 	@echo "Coverage report: $(ABS_COV)/report/index.html"
+
+# ---- Regression triage ----
+# Full flow:    make regress              (run suites -> collect -> prompt)
+# SBINIT only:  make sbinit_regress       (= make regress REGRESS_SUITES=sbinit_all)
+# Prompt only:  make triage_prompt        (collect + prompt from existing run_logs, no sim, no AI)
+# AI triage:    make agent_triage         (collect + prompt, then run claude if available)
+# Archive:      make save_regress NAME=<id>
+# Outputs land in $(REGRESS_OUT)/{summary.json,failures.md,triage_prompt.md}.
+
+# Top-level umbrella: run each suite in REGRESS_SUITES (continue past failures),
+# then collect + build the triage prompt. Extend by appending to REGRESS_SUITES.
+regress:
+	@mkdir -p $(REGRESS_OUT)
+	@for suite in $(REGRESS_SUITES); do \
+	  echo "=== regress: $$suite ==="; \
+	  $(MAKE) $$suite || true; \
+	done
+	$(PYTHON) scripts/collect_regression.py --log-root run_logs --out $(REGRESS_OUT)
+	$(PYTHON) scripts/build_triage_prompt.py --regression $(REGRESS_OUT)/summary.json --out $(REGRESS_OUT)/triage_prompt.md
+	@echo "Regression artifacts: $(REGRESS_OUT)/{summary.json,failures.md,triage_prompt.md}"
+
+# Prompt-only: rebuild summary.json/failures.md/triage_prompt.md from whatever
+# run_logs already exist. No simulation, no AI. triage_prompt is an alias.
+collect_regress:
+	@mkdir -p $(REGRESS_OUT)
+	$(PYTHON) scripts/collect_regression.py --log-root run_logs --out $(REGRESS_OUT)
+	$(PYTHON) scripts/build_triage_prompt.py --regression $(REGRESS_OUT)/summary.json --out $(REGRESS_OUT)/triage_prompt.md
+	@echo "Triage prompt: $(REGRESS_OUT)/triage_prompt.md"
+
+triage_prompt: collect_regress
+
+# Optional AI triage. Builds the prompt, then runs the Claude CLI IF present.
+# Never fails when claude is absent or unauthenticated — it points at the prompt.
+agent_triage: collect_regress
+	@if command -v $(CLAUDE) >/dev/null 2>&1; then \
+	  echo "=== agent_triage: running '$(CLAUDE)' ==="; \
+	  if $(CLAUDE) --bare -p "$$(cat $(REGRESS_OUT)/triage_prompt.md)" \
+	       --allowedTools "Read,Grep,Glob,Bash" \
+	       --output-format json \
+	       > $(REGRESS_OUT)/agent_triage.json 2> $(REGRESS_OUT)/agent_triage.err; then \
+	    echo "agent_triage: wrote $(REGRESS_OUT)/agent_triage.json"; \
+	  else \
+	    echo "agent_triage: '$(CLAUDE)' returned nonzero (unauthenticated?); see $(REGRESS_OUT)/agent_triage.err"; \
+	    echo "agent_triage: the prompt is ready at $(REGRESS_OUT)/triage_prompt.md — paste it into Claude Code / ChatGPT."; \
+	  fi; \
+	else \
+	  echo "agent_triage: '$(CLAUDE)' not found on PATH; skipping AI step."; \
+	  echo "agent_triage: the prompt is ready at $(REGRESS_OUT)/triage_prompt.md — paste it into Claude Code / ChatGPT,"; \
+	  echo "agent_triage: or install the Claude CLI and re-run 'make agent_triage'."; \
+	fi
+
+# Archive the latest snapshot under a descriptive name (the agent's opt-in step).
+save_regress:
+	@if [ -z "$(strip $(NAME))" ]; then \
+	  echo "save_regress: set NAME=<descriptive_run_id>, e.g. make save_regress NAME=new_timeout_fail"; \
+	  exit 1; \
+	fi
+	cp -r $(REGRESS_OUT) regressions/$(NAME)
+	@echo "Saved $(REGRESS_OUT) -> regressions/$(NAME)"
 
 clean:
 	rm -rf *.log *.history INCA_libs xcelium.d run_logs cov_work
